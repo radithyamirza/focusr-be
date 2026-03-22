@@ -1,0 +1,23 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions: {}
+
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          curl -f -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" || exit 1
+          echo "Deploy hook triggered successfully."
