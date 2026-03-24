@@ -1,6 +1,6 @@
 # Deployment Guide — Focusr Backend
 
-This document describes how to connect **Supabase** (PostgreSQL), **Render** (hosting), and **GitHub Actions** (CI/CD) from scratch.
+This document describes how to connect **Supabase** (PostgreSQL), **Fly.io** (hosting), and **GitHub Actions** (CI/CD) from scratch.
 
 ---
 
@@ -8,7 +8,7 @@ This document describes how to connect **Supabase** (PostgreSQL), **Render** (ho
 
 1. [GitHub Secrets](#1-github-secrets)
 2. [Supabase Setup](#2-supabase-setup)
-3. [Render Setup](#3-render-setup)
+3. [Fly.io Setup](#3-flyio-setup)
 4. [GitHub Actions Workflows](#4-github-actions-workflows)
 5. [Branch Strategy](#5-branch-strategy)
 
@@ -20,7 +20,7 @@ Add the following secrets in **GitHub → Repository → Settings → Secrets an
 
 | Secret name | Description |
 |---|---|
-| `RENDER_DEPLOY_HOOK_URL` | Deploy hook URL from Render dashboard → Settings → Deploy Hook |
+| `FLY_API_TOKEN` | API token from Fly.io dashboard → Account → Access Tokens |
 | `DATABASE_URL` | Supabase JDBC URL: `jdbc:postgresql://<host>:5432/postgres` |
 | `DATABASE_USERNAME` | Supabase database username (e.g. `postgres`) |
 | `DATABASE_PASSWORD` | Supabase database password |
@@ -42,37 +42,59 @@ Add the following secrets in **GitHub → Repository → Settings → Secrets an
    ```
    jdbc:postgresql://db.<project-ref>.supabase.co:5432/postgres
    ```
-5. Add these values as GitHub Secrets (`DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`) and as Render environment variables (see section 3).
+5. Add these values as GitHub Secrets (`DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`) and as Fly.io secrets (see section 3).
 
 ---
 
-## 3. Render Setup
+## 3. Fly.io Setup
 
-### Create a Web Service
+### Install flyctl
 
-1. Go to [render.com](https://render.com) and create a new **Web Service**.
-2. Connect it to your GitHub repository (`main` branch = production).
-3. Set the following:
-   - **Runtime**: Docker **or** use the native Java build
-   - **Build command**: `mvn package -DskipTests`
-   - **Start command**: `java -jar target/focusr-be-0.0.1-SNAPSHOT.jar`
-   - **Health check path**: `/actuator/health`
+```bash
+curl -L https://fly.io/install.sh | sh
+```
 
-### Environment Variables (Render Dashboard → Environment)
+### Create and configure the app
 
-| Variable | Value |
-|---|---|
-| `DATABASE_URL` | `jdbc:postgresql://<host>:5432/postgres` |
-| `DATABASE_USERNAME` | Supabase DB username |
-| `DATABASE_PASSWORD` | Supabase DB password |
-| `JWT_SECRET` | Your JWT signing secret (min 32 chars) |
-| `SPRING_PROFILES_ACTIVE` | `default` |
-| `PORT` | `8080` *(Render sets this automatically)* |
+1. Log in to Fly.io:
+   ```bash
+   flyctl auth login
+   ```
+2. From the repository root, launch the app (first time only):
+   ```bash
+   flyctl launch --no-deploy
+   ```
+   When prompted, choose a unique app name (or accept the generated one) and select a region close to your users. Fly.io will detect the `Dockerfile` automatically.
+3. The `fly.toml` file in the repository already contains a baseline configuration. Verify that `app` matches the name you chose in the previous step and update `primary_region` if needed.
 
-### Deploy Hook
+### Set secrets on Fly.io
 
-1. In the Render dashboard, go to **Settings → Deploy Hook**.
-2. Copy the URL and add it to GitHub Secrets as `RENDER_DEPLOY_HOOK_URL`.
+Set the required environment secrets using `flyctl secrets set`:
+
+```bash
+flyctl secrets set \
+  DATABASE_URL="jdbc:postgresql://<host>:5432/postgres" \
+  DATABASE_USERNAME="postgres" \
+  DATABASE_PASSWORD="<your-db-password>" \
+  JWT_SECRET="<your-jwt-secret-min-32-chars>"
+```
+
+> **Note:** `PORT` and `SPRING_PROFILES_ACTIVE` are already defined as plain environment variables in `fly.toml` and do not need to be set as secrets.
+
+### Deploy manually (optional)
+
+```bash
+flyctl deploy
+```
+
+### Get a Fly.io API token for GitHub Actions
+
+1. Go to [fly.io/user/personal_access_tokens](https://fly.io/user/personal_access_tokens) to create a new personal access token, **or** run:
+   ```bash
+   flyctl tokens create deploy -x 999999h
+   ```
+2. Copy the token value.
+3. Add it to GitHub Secrets as `FLY_API_TOKEN` (see section 1).
 
 ---
 
@@ -98,7 +120,8 @@ Triggered on every **push to `main`**.
 | Step | Description |
 |---|---|
 | CI job | Runs the full CI pipeline first via `workflow_call` |
-| Trigger deploy | POSTs to the Render deploy hook URL |
+| Set up flyctl | Installs the Fly.io CLI using the official `superfly/flyctl-actions/setup-flyctl` action |
+| Deploy to Fly.io | Runs `flyctl deploy --remote-only` using the `FLY_API_TOKEN` secret |
 
 ---
 
@@ -106,8 +129,8 @@ Triggered on every **push to `main`**.
 
 | Branch | Environment | Trigger |
 |---|---|---|
-| `main` | Production (Render) | Auto-deploy via GitHub Actions on push |
-| `develop` | Staging | CI runs on every push; to deploy to staging, create a second Render Web Service pointing to the `develop` branch and add a separate `RENDER_STAGING_DEPLOY_HOOK_URL` secret. Then duplicate `deploy.yml`, change the branch filter to `develop`, and use the staging secret. |
+| `main` | Production (Fly.io) | Auto-deploy via GitHub Actions on push |
+| `develop` | Staging | CI runs on every push; to deploy to staging, create a second Fly.io app (e.g. `focusr-be-staging`), add a `FLY_API_TOKEN_STAGING` secret, then duplicate `deploy.yml`, change the branch filter to `develop`, and point `flyctl deploy` to the staging app using `--app focusr-be-staging`. |
 
 ---
 
